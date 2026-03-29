@@ -46,16 +46,34 @@ with st.sidebar:
     year_built = st.number_input("Year Built", value=2005, min_value=1800, max_value=2100)
     house_type = st.selectbox("House Type", options=["Detached", "Townhouse", "Apartment"], index=0, key='house_type')
 
-    st.header("💰 Billing Calibration")
-    may_bill = st.number_input(
-        "May baseline bill (non-AC baseline)",
-        value=110.0,
-        min_value=0.0,
-        step=1.0,
-        help="Enter your approximate May bill representing non-AC loads (fridge, lights, etc.)."
-        , disabled=st.session_state.get('simulate_profile', False)
+    # Monte Carlo parameters are fixed for production-like runs
+    normalize = st.checkbox(
+        "Normalize EF per sqft (optional)",
+        value=False,
+        key='normalize',
+        help="When checked, EF is reported per square foot so you can compare homes of different sizes."
     )
-    summer_bill = st.number_input("Summer Bill (Peak)", value=400.0, min_value=0.0, step=1.0,disabled=st.session_state.get('simulate_profile', False))
+    simulate_profile = st.checkbox(
+        "I don't have bills — simulate EF from house profile",
+        value=False,
+        key='simulate_profile',
+        help="Estimate cooling costs from house profile and user inputs (rate, thermostat, SEER). Billing inputs will be hidden."
+    )
+
+    st.header("💰 Billing Calibration")
+    if not simulate_profile:
+        may_bill = st.number_input(
+            "May baseline bill (non-AC baseline)",
+            value=110.0,
+            min_value=0.0,
+            step=1.0,
+            help="Enter your approximate May bill representing non-AC loads (fridge, lights, etc.)."
+        )
+        summer_bill = st.number_input("Summer Bill (Peak)", value=400.0, min_value=0.0, step=1.0)
+    else:
+        st.info("Simulation mode: billing inputs are hidden — results use simulated EF and cooling-only costs.")
+        may_bill = None
+        summer_bill = None
 
     # Month selector shows names; we'll map to numeric month when used
     default_month_index = 7  # August
@@ -87,8 +105,18 @@ with st.sidebar:
     budget = st.session_state['budget_slider']
 
     # Monte Carlo parameters are fixed for production-like runs
-    normalize = st.checkbox("Normalize EF per sqft (optional)", value=False, key='normalize')
-    simulate_profile = st.checkbox("I don't have bills — simulate EF from house profile", value=False, key='simulate_profile')
+    normalize = st.checkbox(
+        "Normalize EF per sqft (optional)",
+        value=False,
+        key='normalize',
+        help="When checked, EF is reported per square foot so you can compare homes of different sizes."
+    )
+    simulate_profile = st.checkbox(
+        "I don't have bills — simulate EF from house profile",
+        value=False,
+        key='simulate_profile',
+        help="Estimate cooling costs from house profile and user inputs (rate, thermostat, SEER). Billing inputs will be disabled."
+    )
     # Simulation inputs
     if simulate_profile:
         electricity_rate = st.number_input(
@@ -100,10 +128,30 @@ with st.sidebar:
         hvac_seer = st.number_input(
             "HVAC SEER rating (approx)", value=14, min_value=8, max_value=25, step=1,
             help="Approximate SEER efficiency of your AC unit; higher SEER = lower energy.", key='hvac_seer')
+        # power-user tuning knob for the base kWh-per-CDD-per-sqft constant
+        kwh_per_cdd_sqft = st.number_input(
+            "Base kWh per CDD per sqft (power-user)",
+            value=0.0007,
+            min_value=0.0001,
+            max_value=0.0020,
+            step=0.0001,
+            format="%.4f",
+            help="Tunable constant for energy intensity per CDD per sqft. Default 0.0007 kWh/CDD/sqft.")
     else:
         electricity_rate = 0.14
         thermostat_temp = 74
         hvac_seer = 14
+        kwh_per_cdd_sqft = 0.0007
+    # Mitigation slider: hypothetical percent efficiency improvement (0-30%)
+    mitigation_pct = st.slider(
+        "Efficiency Improvement (e.g., New Insulation/AC)",
+        min_value=0,
+        max_value=30,
+        value=0,
+        step=1,
+        help="Apply a hypothetical efficiency improvement (reduces effective $/CDD).",
+        key='mitigation_pct'
+    )
 
 # map selected month name to numeric month
 summer_month = month_names.index(summer_month_name) + 1
@@ -131,6 +179,7 @@ if simulate_profile:
         electricity_rate=electricity_rate,
         thermostat_temp=thermostat_temp,
         hvac_seer=hvac_seer,
+        kwh_per_cdd_sqft=kwh_per_cdd_sqft,
     )
 else:
     ef = calculate_efficiency_factor(
@@ -153,6 +202,13 @@ if normalize:
 else:
     ef_house = ef
 
+# Apply mitigation improvement to the house EF used in simulations
+try:
+    mitigation_fraction = float(st.session_state.get('mitigation_pct', mitigation_pct)) / 100.0
+except Exception:
+    mitigation_fraction = 0.0
+ef_house_adj = float(ef_house) * max(0.0, (1.0 - mitigation_fraction))
+
 # Run Monte Carlo on historical monthly CDDs (fixed production-like draws)
 SIMS = 10000
 sim_cdds, mean_cdd, p90_cdd = run_monte_carlo(month_series, num_simulations=SIMS)
@@ -160,7 +216,7 @@ sim_cdds, mean_cdd, p90_cdd = run_monte_carlo(month_series, num_simulations=SIMS
 # Compute simulated total bills (cooling portion + baseline)
 # If we're in simulation mode (no user bills), don't add the May baseline
 base_load = 0.0 if simulate_profile else may_bill
-sim_costs = estimate_cooling_costs(sim_cdds, ef_house, base_load=base_load)
+sim_costs = estimate_cooling_costs(sim_cdds, ef_house_adj, base_load=base_load)
 
 # Summary stats
 mean_cost = np.mean(sim_costs)
@@ -206,6 +262,14 @@ ax.set_xlabel('Percentile')
 ax.set_title('Simulated monthly bill percentiles')
 ax.legend()
 
+# Draw a horizontal dashed budget line so users can see when percentiles cross the budget
+try:
+    ax.axhline(budget, color='red', linestyle='--', linewidth=1.25, label='Monthly Budget')
+    # place a small label at the right edge
+    ax.annotate(f'Budget ${budget}', xy=(ind[-1] + 0.6, budget), xytext=(0, 3), textcoords='offset points', color='red', ha='right', va='bottom', fontsize=9)
+except Exception:
+    pass
+
 # add value labels above bars
 maxv = max(vals_total.max(), vals_cooling.max()) if hasattr(vals_total, 'max') else max(max(vals_total), max(vals_cooling))
 for rect in bars1 + bars2:
@@ -220,6 +284,87 @@ st.markdown(
     "We run a fixed Monte Carlo sampling of historical months to provide stable, production-like results."
 )
 
+# Policy summary / insights block
+insight_title = None
+if risk_percent < 10:
+    insight_title = "Low Vulnerability"
+    insight_style = "success"
+elif risk_percent < 20:
+    insight_title = "Moderate Vulnerability"
+    insight_style = "info"
+else:
+    insight_title = "High Vulnerability"
+    insight_style = "warning"
+
+insight_msg = (
+    f"Risk Score: {risk_percent:.1f}% — {insight_title}.\n"
+    "Recommended actions: "
+)
+if risk_percent >= 20:
+    insight_msg += "Check attic insulation, schedule HVAC tune-up, or apply for county weatherization programs."
+elif risk_percent >= 10:
+    insight_msg += "Consider adding attic insulation or improving thermostat setbacks."
+else:
+    insight_msg += "Maintain current systems and monitor usage; consider small HVAC tune-ups."
+
+if insight_style == 'success':
+    st.success(insight_msg)
+elif insight_style == 'info':
+    st.info(insight_msg)
+else:
+    st.warning(insight_msg)
+
+# Export buttons: percentiles CSV and a short summary text
+import io
+csv_bytes = io.StringIO()
+pct_df.to_csv(csv_bytes)
+csv_data = csv_bytes.getvalue().encode('utf-8')
+
+summary_lines = []
+summary_lines.append(f"Risk Score: {risk_percent:.1f}%")
+summary_lines.append(f"Monthly Budget: ${budget}")
+summary_lines.append(f"Mitigation applied: {mitigation_pct}%")
+summary_lines.append("")
+summary_lines.append("Percentiles (total / cooling-only):")
+for idx in pct_df.index:
+    summary_lines.append(f"{idx}: ${pct_df.loc[idx,'total_bill']:.2f} / ${pct_df.loc[idx,'cooling_only']:.2f}")
+summary_text = "\n".join(summary_lines)
+
+st.download_button("Download percentiles CSV", data=csv_data, file_name="heatshield_percentiles.csv", mime='text/csv')
+st.download_button("Download summary TXT", data=summary_text, file_name="heatshield_summary.txt", mime='text/plain')
+# PDF export: include title, summary and the chart image
+try:
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    pdf_bytes = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_bytes, pagesize=landscape(letter))
+    styles = getSampleStyleSheet()
+    elems = []
+    elems.append(Paragraph("HeatShield Simulation Summary", styles['Title']))
+    elems.append(Spacer(1, 12))
+    for line in summary_lines:
+        elems.append(Paragraph(line, styles['Normal']))
+        elems.append(Spacer(1, 6))
+
+    # embed the matplotlib figure as an image
+    try:
+        img_buf = io.BytesIO()
+        fig.savefig(img_buf, format='png', bbox_inches='tight')
+        img_buf.seek(0)
+        rl_img = RLImage(img_buf, width=700, height=250)
+        elems.append(Spacer(1, 12))
+        elems.append(rl_img)
+    except Exception:
+        pass
+
+    doc.build(elems)
+    pdf_bytes.seek(0)
+    st.download_button("Download PDF report", data=pdf_bytes.getvalue(), file_name="heatshield_report.pdf", mime='application/pdf')
+except Exception:
+    st.info("PDF export requires `reportlab` installed. See requirements.txt.")
+
 st.divider()
 col_a, col_b, col_c, col_d = st.columns(4)
 col_a.metric("Median Cooling", f"${np.percentile(cooling_vals_clamped,50):.2f}")
@@ -229,55 +374,35 @@ col_d.metric("90% Total", f"${p90_cost:.2f}")
 
 st.markdown("---")
 col1, col2 = st.columns(2)
-col1.metric("Risk Score", f"{risk_percent:.1f}%", delta="High" if risk_percent > 20 else "Low")
-col2.metric("90% Safety Budget", f"${p90_cost:.2f}")
+with col1:
+    st.metric("Risk Score", f"{risk_percent:.1f}%", delta="High" if risk_percent > 20 else "Low")
+    st.info("Risk score: estimated probability the monthly bill will exceed your Monthly Summer Budget (shown as dashed red line on the chart).")
+with col2:
+    st.metric("90% Safety Budget", f"${p90_cost:.2f}")
 
 with st.expander("Calibration details"):
-    st.write("Efficiency factor (normalized):", ef if normalize else "N/A")
-    st.write("Efficiency factor (house $/CDD):", ef_house)
-    st.write("Calibration month CDD (historical by year):")
-    st.write(month_series.describe())
+    # Friendly labels for general users
+    st.write("Efficiency factor (normalized):", f"{ef:.4f}" if normalize else "N/A")
+    st.write("House Heat Sensitivity:", f"${ef_house:.2f} per degree-day")
+    st.write("Calibration month CDD (historical summary):")
+    st.write(month_series.describe().round(2))
+
     if simulate_profile:
-        # Show the simulation multipliers applied for transparency
-        # compute the default base EF used by simulation so we can display it
-        try:
-            kwh_per_cdd_sqft = 0.0007
-            sqft_val = float(sq_ft) if sq_ft is not None else 2000.0
-            base_kwh_per_cdd = kwh_per_cdd_sqft * sqft_val
-            thermostat_penalty = 1.0 + ((74.0 - float(thermostat_temp)) * 0.04)
-            seer_factor = 14.0 / float(hvac_seer)
-            rate = float(electricity_rate)
-            default_base = base_kwh_per_cdd * rate * thermostat_penalty * seer_factor
-        except Exception:
-            default_base = None
+        # show the user-friendly simulation inputs
+        st.write("Simulation inputs used:")
+        st.write("- Electricity rate ($/kWh):", f"${electricity_rate:.2f}")
+        st.write("- Thermostat setpoint (°F):", f"{thermostat_temp}")
+        st.write("- HVAC SEER used:", f"{hvac_seer}")
+    # show mitigation effect
+    st.write("Mitigation applied:", f"{mitigation_pct}%")
+    st.write("House Heat Sensitivity (adjusted):", f"${ef_house_adj:.3f} per degree-day")
 
-        try:
-            penalty = 1.0
-            if year_built is not None:
-                y = int(year_built)
-                if y < 1980:
-                    penalty = 1.45
-                elif y < 2001:
-                    penalty = 1.25
-                elif y < 2016:
-                    penalty = 1.15
-        except Exception:
-            penalty = 1.0
-
-        ht_factor = 1.0
-        if house_type.lower() == 'detached':
-            ht_factor = 1.0
-        elif house_type.lower() == 'townhouse':
-            ht_factor = 0.9
-        elif house_type.lower() == 'apartment':
-            ht_factor = 0.7
-
-        st.write("Simulation mode: used default base EF:", f"${default_base:.3f} per CDD")
-        st.write("Construction-year multiplier:", f"{penalty:.2f}")
-        st.write("House-type multiplier:", f"{ht_factor:.2f}")
-        st.write("Electricity rate used ($/kWh):", f"${electricity_rate:.2f}")
-        st.write("Thermostat setpoint used (°F):", f"{thermostat_temp}")
-        st.write("HVAC SEER used:", f"{hvac_seer}")
+    # Technical data in a collapsed expander for power users / debugging
+    with st.expander("Technical Calibration Data"):
+        st.write("Raw EF (normalized):", ef if normalize else "N/A")
+        st.write("Raw EF (house $/CDD):", ef_house)
+        st.write("Monthly CDD series (full):")
+        st.write(month_series.describe())
 
 if simulate_profile:
     st.caption("Notes: Simulation mode active — EF is estimated from house profile (kWh × rate × modifiers). Simulated costs are cooling-only (May baseline not added).")

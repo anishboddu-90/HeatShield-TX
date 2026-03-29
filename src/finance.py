@@ -26,6 +26,7 @@ def calculate_efficiency_factor(
     electricity_rate=0.14,
     thermostat_temp=74.0,
     hvac_seer=14.0,
+    kwh_per_cdd_sqft=None,
 ):
     # allow last_bill to be None when simulating from profile
     if last_bill is not None:
@@ -88,9 +89,13 @@ def calculate_efficiency_factor(
         # energy- and rate-based approximations instead of a heuristic.
         if default_base_ef is None:
             # energy intensity per CDD per sqft (kWh). Tunable constant.
-            kwh_per_cdd_sqft = 0.0007
-            sqft = float(house_size_sqft) if house_size_sqft is not None else 2000.0
-            base_kwh_per_cdd = kwh_per_cdd_sqft * sqft
+            if kwh_per_cdd_sqft is None:
+                kwh_per_cdd_sqft = 0.0007
+            try:
+                sqft = float(house_size_sqft) if house_size_sqft is not None else 2000.0
+            except Exception:
+                sqft = 2000.0
+            base_kwh_per_cdd = float(kwh_per_cdd_sqft) * sqft
 
             # thermostat adjustment: assume 74°F neutral. Each degree below increases consumption by ~4%.
             try:
