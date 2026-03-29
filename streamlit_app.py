@@ -46,21 +46,9 @@ with st.sidebar:
     year_built = st.number_input("Year Built", value=2005, min_value=1800, max_value=2100)
     house_type = st.selectbox("House Type", options=["Detached", "Townhouse", "Apartment"], index=0, key='house_type')
 
-    # Monte Carlo parameters are fixed for production-like runs
-    normalize = st.checkbox(
-        "Normalize EF per sqft (optional)",
-        value=False,
-        key='normalize',
-        help="When checked, EF is reported per square foot so you can compare homes of different sizes."
-    )
-    simulate_profile = st.checkbox(
-        "I don't have bills — simulate EF from house profile",
-        value=False,
-        key='simulate_profile',
-        help="Estimate cooling costs from house profile and user inputs (rate, thermostat, SEER). Billing inputs will be hidden."
-    )
 
     st.header("💰 Billing Calibration")
+    simulate_profile = st.session_state.get('simulate_profile', False)
     if not simulate_profile:
         may_bill = st.number_input(
             "May baseline bill (non-AC baseline)",
@@ -101,7 +89,7 @@ with st.sidebar:
     with col_budget:
         st.slider("Monthly Summer Budget ($)", 0, 2000, key='budget_slider', on_change=_sync_slider)
     with col_budget_input:
-        st.number_input("", min_value=0, max_value=2000, step=1, key='budget_input', on_change=_sync_input)
+        st.number_input("Monthly budget (hidden label)", min_value=0, max_value=2000, step=1, key='budget_input', on_change=_sync_input, label_visibility='collapsed')
     budget = st.session_state['budget_slider']
 
     # Monte Carlo parameters are fixed for production-like runs
