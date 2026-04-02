@@ -1,11 +1,42 @@
 from data_cleaning import compute_monthly_stats, clean_data
 import pandas as pd
 import numpy as np
+import datetime
 
 
-from data_cleaning import compute_monthly_stats, clean_data
-import pandas as pd
-import numpy as np
+def get_inflation_factor(baseline_year, target_year, cpi_series=None, default_annual_rate=0.03):
+    try:
+        baseline_year = int(baseline_year)
+        target_year = int(target_year)
+    except Exception:
+        return 1.0
+
+    if baseline_year == target_year:
+        return 1.0
+
+    def _annual_means(series):
+        s = series.copy()
+        if not isinstance(s.index, pd.DatetimeIndex):
+            try:
+                s.index = pd.to_datetime(s.index)
+            except Exception:
+                return None
+        return s.resample('Y').mean().rename(lambda dt: dt.year)
+
+    # 1) Use provided cpi_series if given
+    if cpi_series is not None:
+        try:
+            annual = _annual_means(cpi_series)
+            if annual is not None and baseline_year in annual.index and target_year in annual.index:
+                return float(annual.loc[target_year] / annual.loc[baseline_year])
+        except Exception:
+            pass
+    try:
+        delta = int(target_year) - int(baseline_year)
+        return (1.0 + float(default_annual_rate)) ** delta
+    except Exception:
+        return 1.0
+
 
 monthly_by_year = None
 
@@ -27,6 +58,9 @@ def calculate_efficiency_factor(
     thermostat_temp=74.0,
     hvac_seer=14.0,
     kwh_per_cdd_sqft=None,
+    adjust_baseline_for_inflation=False,
+    inflation_cpi_series=None,
+    default_annual_inflation=0.03,
 ):
     # allow last_bill to be None when simulating from profile
     if last_bill is not None:
@@ -43,27 +77,27 @@ def calculate_efficiency_factor(
                 baseline_bill = float(baseline_bill)
             except Exception:
                 raise ValueError('baseline_bill must be numeric')
+            # Optionally adjust baseline dollars from its year to the bill year
+            if adjust_baseline_for_inflation and baseline_bill_year is not None:
+                try:
+                    factor = get_inflation_factor(baseline_bill_year, bill_year, cpi_series=inflation_cpi_series, default_annual_rate=default_annual_inflation)
+                    baseline_bill = baseline_bill * factor
+                except Exception:
+                    # if adjustment fails, continue with raw baseline_bill
+                    pass
             ac_cost = last_bill - baseline_bill
 
         if ac_cost is not None and ac_cost <= 0:
             return 0.0
 
-    # Lookup precomputed CDD for the provided month and year. Prefer the
-    # caller-provided `monthly_series` (a Series indexed by (year, month) or
-    # a MultiIndex keyed Series) for better isolation; otherwise fall back to
-    # the module-level `monthly_by_year` if present.
     source = monthly_series if monthly_series is not None else monthly_by_year
     if source is None:
         raise ValueError('monthly_series must be provided to calculate_efficiency_factor')
 
-    # source may be a Series indexed by (year, month) MultiIndex or by year only
     try:
         cdd_for_month = source.get((bill_year, bill_month), 0.0)
     except Exception:
-        # if `source` is a Series indexed by year only for the target month,
-        # attempt to select values where level month equals bill_month
         try:
-            # assume MultiIndex with names (year, month)
             cdd_for_month = source.xs(bill_month, level=1)
             cdd_for_month = cdd_for_month.get(bill_year, 0.0)
         except Exception:
@@ -82,13 +116,9 @@ def calculate_efficiency_factor(
         return base_ef
 
     # Otherwise, if allowed, simulate EF from profile using default_base_ef and
-    # apply construction/house-type multipliers. This is used when the user
-    # doesn't have bills and wants an estimated EF.
     if simulate_if_missing:
-        # If no explicit default_base_ef provided, compute it from
-        # energy- and rate-based approximations instead of a heuristic.
         if default_base_ef is None:
-            # energy intensity per CDD per sqft (kWh). Tunable constant.
+            # energy intensity per CDD per sqft (kWh)
             if kwh_per_cdd_sqft is None:
                 kwh_per_cdd_sqft = 0.0007
             try:
@@ -97,7 +127,7 @@ def calculate_efficiency_factor(
                 sqft = 2000.0
             base_kwh_per_cdd = float(kwh_per_cdd_sqft) * sqft
 
-            # thermostat adjustment: assume 74°F neutral. Each degree below increases consumption by ~4%.
+            # thermostat adjustment: assume 74 F neutral. Each degree below increases consumption by ~4%.
             try:
                 thermostat_penalty = 1.0 + ((74.0 - float(thermostat_temp)) * 0.04)
             except Exception:
