@@ -73,6 +73,30 @@ with st.sidebar:
     else:
         calibration_year = st.number_input("Calibration Year", value=2023)
 
+    # Baseline month/year for the May baseline bill (allow user to specify)
+    baseline_month_name = st.selectbox("Baseline Month (month of baseline bill)", options=month_names, index=4)
+    baseline_bill_month = month_names.index(baseline_month_name) + 1
+    baseline_bill_year = st.number_input("Baseline Year (year of baseline bill)", value=calibration_year if 'calibration_year' in locals() else 2023, min_value=1900, max_value=2100, step=1)
+
+    # Optional inflation adjustment for baseline dollars
+    adjust_baseline_for_inflation = st.checkbox(
+        "Adjust baseline for inflation",
+        value=False,
+        help="If checked, normalize the baseline bill dollars from its year to the calibration year using an annual inflation percent."
+    )
+    if adjust_baseline_for_inflation:
+        annual_inflation_pct = st.number_input(
+            "Annual inflation (%)",
+            value=3.0,
+            min_value=0.0,
+            max_value=100.0,
+            step=0.1,
+            format="%.2f",
+            help="Annual inflation rate used to compound baseline dollars when CPI data is not available."
+        )
+    else:
+        annual_inflation_pct = 3.0
+
     # synchronized slider + textbox for budget
     if 'budget_slider' not in st.session_state:
         st.session_state['budget_slider'] = 450
@@ -174,9 +198,11 @@ else:
         last_bill=summer_bill,
         bill_month=summer_month,
         bill_year=calibration_year,
-        baseline_bill=may_bill,
-        baseline_bill_month=5,
-        baseline_bill_year=calibration_year,
+            baseline_bill=may_bill,
+            baseline_bill_month=baseline_bill_month,
+            baseline_bill_year=baseline_bill_year,
+            adjust_baseline_for_inflation=adjust_baseline_for_inflation,
+            default_annual_inflation=(float(annual_inflation_pct) / 100.0),
         house_size_sqft=sq_ft if normalize else None,
         normalized=normalize,
         CONSTRUCTION_YEAR=year_built,
