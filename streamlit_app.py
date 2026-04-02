@@ -28,7 +28,7 @@ def load_clean_data(path=None):
     return clean_data(df)
 
 st.set_page_config(page_title="HeatShield Collin County", layout="wide")
-st.title("☀️ HeatShield: Energy Risk Portal")
+st.title("HeatShield Energy Risk Portal")
 st.markdown("Predicting financial vulnerability to Texas heatwaves")
 
 # single sidebar defined later (after loading data)
@@ -47,7 +47,7 @@ with st.sidebar:
     house_type = st.selectbox("House Type", options=["Detached", "Townhouse", "Apartment"], index=0, key='house_type')
 
 
-    st.header("💰 Billing Calibration")
+    st.header("Billing Calibration")
     simulate_profile = st.session_state.get('simulate_profile', False)
     if not simulate_profile:
         may_bill = st.number_input(
@@ -97,7 +97,7 @@ with st.sidebar:
         "Normalize EF per sqft (optional)",
         value=False,
         key='normalize',
-        help="When checked, EF is reported per square foot so you can compare homes of different sizes."
+        help="When checked, EF is reported per square foot so you can compare homes of different sizes. EF: the $/CDD efficiency factor calibrated from your bills; higher EF means more sensitive to heat."
     )
     simulate_profile = st.checkbox(
         "I don't have bills — simulate EF from house profile",

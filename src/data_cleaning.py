@@ -38,5 +38,3 @@ def compute_monthly_stats(df):
     # Return monthly sums of CDD indexed by month
     monthly_cdd = df.groupby('month')['cdd'].sum()
     return monthly_cdd
-# NOTE: do not load data at import time. Call `clean_data()` with a dataframe
-# or use a helper in your application to read the CSV file and pass the DataFrame.
