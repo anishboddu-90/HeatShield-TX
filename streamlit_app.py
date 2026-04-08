@@ -182,7 +182,7 @@ if simulate_profile:
         bill_month=summer_month,
         bill_year=calibration_year,
         baseline_bill=None,
-        house_size_sqft=sq_ft if normalize else None,
+        house_size_sqft=sq_ft,
         normalized=normalize,
         CONSTRUCTION_YEAR=year_built,
         HOUSE_TYPE=house_type,
